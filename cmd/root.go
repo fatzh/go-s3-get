@@ -19,6 +19,7 @@ import (
 	"github.com/rivo/tview"
 	"github.com/spf13/cobra"
 	"gopkg.in/ini.v1"
+  "github.com/aymanbagabas/go-osc52/v2"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -160,7 +161,6 @@ var rootCmd = &cobra.Command{
           Bucket: aws.String(bucketName),
           Prefix: aws.String(prefix),
         }
-        prefix = ""
       } else {
         input = &s3.ListObjectsV2Input{
           Bucket: aws.String(bucketName),
@@ -185,8 +185,13 @@ var rootCmd = &cobra.Command{
       if len(objects) > 0 && objectPaginator.HasMorePages() {
         objectsCountInfo += "+"
       }
+      objectsCountInfo += " files"
+      if prefix != "" {
+        objectsCountInfo += " - prefix filter: " + prefix
+      }
+      prefix = ""
 
-      fileInfo.SetText(objectsCountInfo + " files")
+      fileInfo.SetText(objectsCountInfo)
 
       // list them here
       for i, object := range objects {
@@ -252,11 +257,11 @@ var rootCmd = &cobra.Command{
         credentialsSelected := credentialsView.GetCell(credentialsView.GetSelection()).Text
         cwdInfo.SetText(credentialsSelected)
       }
-      // if event.Rune() == '/' {
-      //   searchField.SetText(prefix)
-      //   pages.ShowPage(searchModalPage)
-      //   app.SetFocus(searchField)
-      // }
+      if event.Rune() == '/' {
+        searchField.SetText(prefix)
+        pages.ShowPage(searchModalPage)
+        app.SetFocus(searchField)
+      }
       return event
     })
 
@@ -279,7 +284,9 @@ var rootCmd = &cobra.Command{
         if err != nil {
           log.Println("Failed to sign the request", err)
         }
-        objectText.SetText("\n\nBucket: " + bucketSelected + "\nKey: " + objectSelected + "\n\n[:::" + presignedGetRequest.URL +"]Download link")
+        objectText.SetText("\n\nBucket: " + bucketSelected + "\nKey: " + objectSelected + "\n\n[:::" + presignedGetRequest.URL +"]Download link (copied to clipboard)")
+        // copy to clipboard
+        osc52.New(presignedGetRequest.URL).WriteTo(os.Stderr)
         pages.ShowPage(objectViewPage)
         app.SetFocus(objectText)
       }
