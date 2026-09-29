@@ -1,0 +1,3 @@
+* lots of refactoring! it's a mess, ideally split into files?
+* flex layout?
+* add a --log/debug flag to control what's logged

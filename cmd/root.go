@@ -2,6 +2,8 @@
 Copyright © 2026 Fabrice Tereszkiewicz - A/Z&T <fabrice@azt.ch>
 
 Check https://sacules.github.io/post/adventures-go-tui-1/ for inspiration
+
+AWS SDK v2: https://pkg.go.dev/github.com/aws/aws-sdk-go-v2
 */
 
 package cmd
@@ -15,29 +17,42 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aymanbagabas/go-osc52/v2"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/spf13/cobra"
 	"gopkg.in/ini.v1"
-  "github.com/aymanbagabas/go-osc52/v2"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-  "github.com/awsdocs/aws-doc-sdk-examples/gov2/s3/actions"
 	"github.com/aws/smithy-go"
+	"github.com/awsdocs/aws-doc-sdk-examples/gov2/s3/actions"
 )
 
 // store the sections in the credential file
 var (
   credentials []*ini.Section
   app *tview.Application
+  currentRegion string = "eu-central-1"
+  credentialsSelected string
 )
 
 const searchModalPage = "*searchModalPage*"
 const mainViewPage = "*mainViewPage*"
 const objectViewPage = "*objectViewPage"
+
+type regionClient struct {
+  *s3.Client
+  region string
+}
+
+// override ListObjectsV2 to use the custom regionClient
+func (c regionClient) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+  return c.Client.ListObjectsV2(ctx, in, append(optFns, func(o *s3.Options) { o.Region = c.region })...)
+}
+
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -46,6 +61,16 @@ var rootCmd = &cobra.Command{
 	Long: `Use this tool to browse files on a S3 compatible bucket.`,
   Run: func(cmd *cobra.Command, args []string) { 
     app = tview.NewApplication()
+
+    logFile, err := os.OpenFile("/tmp/s3get.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+    if err != nil {
+        log.Fatalf("Failed to open log file: %v", err)
+    }
+    defer logFile.Close()
+
+    log.SetOutput(logFile)
+    log.SetFlags(log.LstdFlags | log.Lshortfile)
+    log.Println("Starting...")
 
     var (
       // grid layout
@@ -92,7 +117,8 @@ var rootCmd = &cobra.Command{
 
     // selecting a credentials should load the buckets for this account
     listBuckets := func(row, column int) {
-      credentialsSelected := credentialsView.GetCell(row, 0).Text
+      credentialsSelected = credentialsView.GetCell(row, 0).Text
+      log.Println("Listing buckets for " + credentialsSelected)
       cwdInfo.SetText(credentialsSelected)
       // initialise profile
       ctx = context.Background()
@@ -104,7 +130,7 @@ var rootCmd = &cobra.Command{
       }
 
       s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
-        o.Region = "eu-central-1"  // not sure why... I don't think it matters for S3
+        o.Region = currentRegion
       })
 
       // clear bucket list
@@ -113,7 +139,10 @@ var rootCmd = &cobra.Command{
       bucketsView.SetSelectable(false, false)
 
       // load buckets using credentials
-      result, err := s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
+      result, err := s3Client.ListBuckets(ctx, &s3.ListBucketsInput{
+        // need at least one option to get the region back
+        MaxBuckets: aws.Int32(100),
+      })
 
       if err != nil {
         var ae smithy.APIError
@@ -138,6 +167,8 @@ var rootCmd = &cobra.Command{
         for i, bucket := range result.Buckets[:count] {
           cell := tview.NewTableCell(*bucket.Name)
           cell.SetExpansion(1)
+          // add a reference on the cell
+          cell.SetReference(aws.ToString(bucket.BucketRegion))
           bucketsView.SetCell(i, 0, cell)
         }
       }
@@ -149,6 +180,8 @@ var rootCmd = &cobra.Command{
       // clear content
       contentView.Clear()
       bucketName := bucketsView.GetCell(row, 0).Text
+      bucketRegion := bucketsView.GetCell(row, 0).GetReference().(string)
+      log.Println("Listing objects in " + bucketName + " in region " + bucketRegion)
       cwdInfo.SetText(bucketName)
       var (
         err error
@@ -156,6 +189,12 @@ var rootCmd = &cobra.Command{
         output *s3.ListObjectsV2Output
         objects []types.Object
       )
+
+      if bucketRegion != currentRegion{
+        log.Println("Switching region from " + currentRegion + " to " + bucketRegion)
+        currentRegion = bucketRegion
+      }
+
       if prefix != "" {
         input = &s3.ListObjectsV2Input{
           Bucket: aws.String(bucketName),
@@ -166,42 +205,48 @@ var rootCmd = &cobra.Command{
           Bucket: aws.String(bucketName),
         }
       }
-      objectPaginator := s3.NewListObjectsV2Paginator(s3Client, input)
-      fileInfo.SetText("Loading files...")
+      log.Println(currentRegion)
+      objectPaginator := s3.NewListObjectsV2Paginator(regionClient{s3Client, currentRegion}, input)
+      fileInfo.SetText("Loading files ...")
       // just one page...
       output, err = objectPaginator.NextPage(ctx)
       if err != nil {
         var noBucket *types.NoSuchBucket
         if errors.As(err, &noBucket) {
-          log.Printf("Bucket %s does not exist.\n", bucketName)
+          log.Println("Bucket " + bucketName + " does not exist.")
           err = noBucket
+        } else {
+          log.Println("Error listing bucket " + bucketName)
+          log.Println(err)
+          log.Println(output)
         }
+        fileInfo.SetText(err.Error())
       } else {
         objects = append(objects, output.Contents...)
+        // count objects
+        objectsCountInfo := strconv.Itoa(len(objects))
+        if len(objects) > 0 && objectPaginator.HasMorePages() {
+          objectsCountInfo += "+"
+        }
+        objectsCountInfo += " files"
+        if prefix != "" {
+          objectsCountInfo += " - prefix filter: " + prefix
+        }
+        prefix = ""
+
+        fileInfo.SetText(objectsCountInfo)
+
+        // list them here
+        for i, object := range objects {
+            cell := tview.NewTableCell(*object.Key)
+            cell.SetExpansion(1)
+            contentView.SetCell(i, 0, cell)
+        }
+        contentView.SetSelectable(false, false)
+        contentView.ScrollToBeginning()
+        app.SetFocus(bucketsView)
       }
 
-      // count objects
-      objectsCountInfo := strconv.Itoa(len(objects))
-      if len(objects) > 0 && objectPaginator.HasMorePages() {
-        objectsCountInfo += "+"
-      }
-      objectsCountInfo += " files"
-      if prefix != "" {
-        objectsCountInfo += " - prefix filter: " + prefix
-      }
-      prefix = ""
-
-      fileInfo.SetText(objectsCountInfo)
-
-      // list them here
-      for i, object := range objects {
-          cell := tview.NewTableCell(*object.Key)
-          cell.SetExpansion(1)
-          contentView.SetCell(i, 0, cell)
-      }
-      contentView.SetSelectable(false, false)
-      contentView.ScrollToBeginning()
-      app.SetFocus(bucketsView)
     }
 
     getObjectInfo := func(row, column int) {
@@ -276,9 +321,12 @@ var rootCmd = &cobra.Command{
         cwdInfo.SetText(bucketSelected)
       case tcell.KeyEnter :
         bucketSelected := bucketsView.GetCell(bucketsView.GetSelection()).Text
+        bucketRegion := bucketsView.GetCell(bucketsView.GetSelection()).GetReference().(string)
         objectSelected := contentView.GetCell(contentView.GetSelection()).Text
         // get a download url
-        presignClient := s3.NewPresignClient(s3Client)
+        presignClient := s3.NewPresignClient(s3Client, func(o *s3.PresignOptions) {
+          o.ClientOptions = append(o.ClientOptions, func(so *s3.Options) { so.Region = bucketRegion })
+        })
         presigner := actions.Presigner{PresignClient: presignClient}
         presignedGetRequest, err := presigner.GetObject(ctx, bucketSelected, objectSelected, 60)
         if err != nil {
@@ -343,7 +391,7 @@ var rootCmd = &cobra.Command{
     })
 
     // main view layout
-    mainView.SetBorders(true).SetColumns(10, 0, 40).SetRows(1, 0, 1)
+    mainView.SetBorders(true).SetColumns(10, 40, 0).SetRows(1, 0, 1)
 
     // add the widgets
     mainView.
@@ -379,7 +427,7 @@ var rootCmd = &cobra.Command{
     app.SetFocus(credentialsView)
 
     // run
-    err := app.Run()
+    err = app.Run()
     if err != nil {
       panic(err)
     }
