@@ -275,6 +275,8 @@ var rootCmd = &cobra.Command{
         r, _ := bucketsView.GetSelection()
         currentBucket := bucketsView.GetCell(r, 0).Text
         cwdInfo.SetText(currentBucket)
+        // list content of first bucket
+        listBucketContent(0, 0)
       }
       if event.Rune() == 'q' {
         app.Stop()
