@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -37,6 +38,7 @@ var (
   app *tview.Application
   currentRegion string = "eu-central-1"
   credentialsSelected string
+  logEnabled bool
 )
 
 const searchModalPage = "*searchModalPage*"
@@ -62,15 +64,19 @@ var rootCmd = &cobra.Command{
   Run: func(cmd *cobra.Command, args []string) { 
     app = tview.NewApplication()
 
-    logFile, err := os.OpenFile("/tmp/s3get.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-    if err != nil {
-        log.Fatalf("Failed to open log file: %v", err)
-    }
-    defer logFile.Close()
+    if logEnabled {
+      logFile, err := os.OpenFile("/tmp/s3get.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+      if err != nil {
+          log.Fatalf("Failed to open log file: %v", err)
+      }
+      defer logFile.Close()
 
-    log.SetOutput(logFile)
-    log.SetFlags(log.LstdFlags | log.Lshortfile)
-    log.Println("Starting...")
+      log.SetOutput(logFile)
+      log.SetFlags(log.LstdFlags | log.Lshortfile)
+      log.Println("Starting...")
+    } else {
+      log.SetOutput(io.Discard)
+    }
 
     var (
       // grid layout
@@ -429,7 +435,7 @@ var rootCmd = &cobra.Command{
     app.SetFocus(credentialsView)
 
     // run
-    err = app.Run()
+    err := app.Run()
     if err != nil {
       panic(err)
     }
@@ -447,6 +453,7 @@ func Execute() {
 
 func init() {
   cobra.OnInitialize(loadCredentials)
+  rootCmd.Flags().BoolVar(&logEnabled, "log", false, "write debug logs to /tmp/s3get.log")
 }
 
 
