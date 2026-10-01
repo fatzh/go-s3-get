@@ -242,7 +242,6 @@ var rootCmd = &cobra.Command{
 				if prefix != "" {
 					objectsCountInfo += " - prefix filter: " + prefix
 				}
-				prefix = ""
 
 				fileInfo.SetText(objectsCountInfo)
 
@@ -252,9 +251,18 @@ var rootCmd = &cobra.Command{
 					cell.SetExpansion(1)
 					contentView.SetCell(i, 0, cell)
 				}
-				contentView.SetSelectable(false, false)
-				contentView.ScrollToBeginning()
-				app.SetFocus(bucketsView)
+				// if search, select the content list
+				if prefix != "" && len(objects) > 0 {
+					contentView.SetSelectable(true, false)
+					contentView.ScrollToBeginning()
+					app.SetFocus(contentView)
+					contentView.Select(0, 0)
+				} else {
+					contentView.SetSelectable(false, false)
+					contentView.ScrollToBeginning()
+					app.SetFocus(bucketsView)
+				}
+				prefix = ""
 			}
 
 		}
@@ -276,17 +284,19 @@ var rootCmd = &cobra.Command{
 		// change/move in the profile list
 		credentialsView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			if event.Key() == tcell.KeyRight {
-				// handle UI
-				bucketsView.SetSelectable(true, false)
-				app.SetFocus(bucketsView)
-				bucketsView.Select(0, 0)
-				contentView.Clear()
-				contentView.SetSelectable(false, false)
-				r, _ := bucketsView.GetSelection()
-				currentBucket := bucketsView.GetCell(r, 0).Text
-				cwdInfo.SetText(currentBucket)
-				// list content of first bucket
-				listBucketContent(0, 0)
+				if bucketsView.GetRowCount() > 0 {
+					// handle UI
+					bucketsView.SetSelectable(true, false)
+					app.SetFocus(bucketsView)
+					bucketsView.Select(0, 0)
+					contentView.Clear()
+					contentView.SetSelectable(false, false)
+					r, _ := bucketsView.GetSelection()
+					currentBucket := bucketsView.GetCell(r, 0).Text
+					cwdInfo.SetText(currentBucket)
+					// list content of first bucket
+					listBucketContent(0, 0)
+				}
 			}
 			if event.Rune() == 'q' {
 				app.Stop()
@@ -299,12 +309,14 @@ var rootCmd = &cobra.Command{
 		bucketsView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			switch key := event.Key(); key {
 			case tcell.KeyRight:
-				app.SetFocus(contentView)
-				contentView.SetSelectable(true, false)
-				contentView.Select(0, 0)
-				r, _ := contentView.GetSelection()
-				currentFile := contentView.GetCell(r, 0).Text
-				cwdInfo.SetText(currentFile)
+				if contentView.GetRowCount() > 0 {
+					app.SetFocus(contentView)
+					contentView.SetSelectable(true, false)
+					contentView.Select(0, 0)
+					r, _ := contentView.GetSelection()
+					currentFile := contentView.GetCell(r, 0).Text
+					cwdInfo.SetText(currentFile)
+				}
 			case tcell.KeyLeft:
 				app.SetFocus(credentialsView)
 				contentView.Clear()
@@ -451,6 +463,9 @@ var rootCmd = &cobra.Command{
 
 		// select
 		app.SetFocus(credentialsView)
+		if credentialsView.GetRowCount() > 0 {
+			credentialsView.Select(0, 0)
+		}
 
 		// run
 		err := app.Run()
