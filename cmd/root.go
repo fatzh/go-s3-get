@@ -35,6 +35,7 @@ import (
 // store the sections in the credential file
 var (
 	credentials         []*ini.Section
+	endpointUrls        map[string]string
 	app                 *tview.Application
 	currentRegion       string = "eu-central-1"
 	currentObjectUrl    string
@@ -120,6 +121,7 @@ var rootCmd = &cobra.Command{
 		// display a list of available S3 profiles in the credentialsView table
 		for i, cred := range credentials {
 			cell := tview.NewTableCell(cred.Name())
+			log.Println(cred)
 			cell.SetExpansion(1)
 			// add it to the table
 			credentialsView.SetCell(i, 0, cell)
@@ -139,9 +141,21 @@ var rootCmd = &cobra.Command{
 				panic(err)
 			}
 
-			s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
-				o.Region = currentRegion
-			})
+			// check custom endpoint-url
+			endpointUrl := endpointUrls[credentialsSelected]
+			if endpointUrl != "" {
+				log.Printf("Switching to endpoint %s and current region %s", endpointUrl, currentRegion)
+				s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+					o.Region = currentRegion
+					o.BaseEndpoint = aws.String(endpointUrl)
+					o.UsePathStyle = *aws.Bool(false)
+				})
+			} else {
+				currentRegion = "eu-central-1"
+				s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+					o.Region = currentRegion
+				})
+			}
 
 			// clear bucket list
 			bucketsView.Clear()
@@ -159,6 +173,7 @@ var rootCmd = &cobra.Command{
 				if errors.As(err, &ae) && ae.ErrorCode() == "AccessDenied" {
 					fileInfo.SetText("You don't have permission to list buckets for this account.")
 				} else {
+					log.Println(err)
 					fileInfo.SetText("Error") // how do I get the error info here?
 				}
 				return
@@ -485,7 +500,7 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(loadCredentials)
+	cobra.OnInitialize(loadCredentials, loadEndpoints)
 	rootCmd.Flags().BoolVar(&logEnabled, "log", false, "write debug logs to /tmp/s3get.log")
 }
 
@@ -502,6 +517,25 @@ func loadCredentials() {
 			continue
 		}
 		credentials = append(credentials, credential)
+	}
+}
+
+// custom endpoints for some credentials
+func loadEndpoints() {
+	endpointUrls = make(map[string]string)
+	homedir, err := os.UserHomeDir()
+	profiles, err := ini.Load(homedir + "/.aws/config")
+	if err != nil {
+		// justs return...?
+		panic(fmt.Errorf("fatal error config file: %w", err))
+	}
+	for _, credential := range credentials {
+		section := profiles.Section("profile " + credential.Name())
+		endpointUrl := section.Key("endpoint_url")
+		if endpointUrl.String() != "" {
+			endpointUrls[credential.Name()] = endpointUrl.String()
+		}
+
 	}
 }
 
