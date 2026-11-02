@@ -15,6 +15,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -518,6 +519,11 @@ func loadCredentials() {
 		}
 		credentials = append(credentials, credential)
 	}
+
+	// sort by name
+	sort.Slice(credentials, func(i, j int) bool {
+		return credentials[i].Name() < credentials[j].Name()
+	})
 }
 
 // custom endpoints for some credentials
