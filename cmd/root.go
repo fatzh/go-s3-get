@@ -109,6 +109,10 @@ var rootCmd = &cobra.Command{
 			// prefix search, to be reset after search
 			prefix string
 
+			// nil means the search field filters bucket contents.
+			// Otherwise it points to the table being navigated.
+			navigationTarget *tview.Table
+
 			// s3 stuff
 			s3Client *s3.Client
 			ctx      context.Context
@@ -267,12 +271,15 @@ var rootCmd = &cobra.Command{
 					cell.SetExpansion(1)
 					contentView.SetCell(i, 0, cell)
 				}
-				// if search, select the content list
-				if prefix != "" && len(objects) > 0 {
-					contentView.SetSelectable(true, false)
+				// Keep focus on the content list after a prefix search, even when
+				// it has no results, so another "/" starts a content search.
+				if prefix != "" {
+					contentView.SetSelectable(len(objects) > 0, false)
 					contentView.ScrollToBeginning()
 					app.SetFocus(contentView)
-					contentView.Select(0, 0)
+					if len(objects) > 0 {
+						contentView.Select(0, 0)
+					}
 				} else {
 					contentView.SetSelectable(false, false)
 					contentView.ScrollToBeginning()
@@ -314,6 +321,13 @@ var rootCmd = &cobra.Command{
 					listBucketContent(0, 0)
 				}
 			}
+			if event.Rune() == '/' {
+				navigationTarget = credentialsView
+				searchField.SetText("")
+				pages.ShowPage(searchModalPage)
+				app.SetFocus(searchField)
+				return nil
+			}
 			if event.Rune() == 'q' {
 				app.Stop()
 
@@ -343,9 +357,11 @@ var rootCmd = &cobra.Command{
 				cwdInfo.SetText(credentialsSelected)
 			}
 			if event.Rune() == '/' {
-				searchField.SetText(prefix)
+				navigationTarget = bucketsView
+				searchField.SetText("")
 				pages.ShowPage(searchModalPage)
 				app.SetFocus(searchField)
+				return nil
 			}
 			return event
 		})
@@ -384,9 +400,11 @@ var rootCmd = &cobra.Command{
 			}
 
 			if event.Rune() == '/' {
+				navigationTarget = nil
 				searchField.SetText(prefix)
 				pages.ShowPage(searchModalPage)
 				app.SetFocus(searchField)
+				return nil
 			}
 			return event
 		})
@@ -401,19 +419,43 @@ var rootCmd = &cobra.Command{
 		searchField.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			switch key := event.Key(); key {
 			case tcell.KeyEnter:
-				// search...
-				prefix = searchField.GetText()
+				query := strings.TrimSpace(searchField.GetText())
 				pages.ShowPage(mainViewPage)
 				pages.HidePage(searchModalPage)
-				// and refresh
+
+				if navigationTarget != nil {
+					if query != "" {
+						query = strings.ToLower(query)
+						for row := 0; row < navigationTarget.GetRowCount(); row++ {
+							text := navigationTarget.GetCell(row, 0).Text
+							if strings.HasPrefix(strings.ToLower(text), query) {
+								navigationTarget.Select(row, 0)
+								break
+							}
+						}
+					}
+					app.SetFocus(navigationTarget)
+					navigationTarget = nil
+					return nil
+				}
+
+				// Existing content-filter behavior.
+				prefix = query
 				listBucketContent(bucketsView.GetSelection())
+				return nil
 			case tcell.KeyEscape:
 				prefix = ""
 				pages.ShowPage(mainViewPage)
 				pages.HidePage(searchModalPage)
-				contentView.SetSelectable(true, false)
-				contentView.ScrollToBeginning()
-				app.SetFocus(contentView)
+				if navigationTarget != nil {
+					app.SetFocus(navigationTarget)
+					navigationTarget = nil
+				} else {
+					contentView.SetSelectable(true, false)
+					contentView.ScrollToBeginning()
+					app.SetFocus(contentView)
+				}
+				return nil
 			}
 			return event
 		})
