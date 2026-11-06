@@ -384,7 +384,7 @@ var rootCmd = &cobra.Command{
 					o.ClientOptions = append(o.ClientOptions, func(so *s3.Options) { so.Region = bucketRegion })
 				})
 				presigner := actions.Presigner{PresignClient: presignClient}
-				presignedGetRequest, err := presigner.GetObject(ctx, bucketSelected, objectSelected, 60)
+				presignedGetRequest, err := presigner.GetObject(ctx, bucketSelected, objectSelected, 3600)
 				if err != nil {
 					log.Println("Failed to sign the request", err)
 				}
